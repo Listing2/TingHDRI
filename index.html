@@ -1,0 +1,280 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>HDRI Texture Viewer</title>
+  <style>
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      min-height: 100vh;
+      overflow: hidden;
+      font-family: Arial, Helvetica, sans-serif;
+      color: #f5f7fb;
+      background: #101216;
+    }
+
+    canvas {
+      display: block;
+    }
+
+    .panel {
+      position: fixed;
+      top: 16px;
+      left: 16px;
+      z-index: 10;
+      width: min(360px, calc(100vw - 32px));
+      padding: 16px;
+      border: 1px solid rgba(255, 255, 255, 0.16);
+      border-radius: 14px;
+      background: rgba(14, 17, 23, 0.82);
+      backdrop-filter: blur(12px);
+      box-shadow: 0 18px 48px rgba(0, 0, 0, 0.35);
+    }
+
+    .panel h1 {
+      margin: 0 0 8px;
+      font-size: 20px;
+      line-height: 1.2;
+    }
+
+    .panel p {
+      margin: 0 0 14px;
+      color: #c8d0dc;
+      font-size: 14px;
+      line-height: 1.55;
+    }
+
+    .drop-zone {
+      display: grid;
+      place-items: center;
+      min-height: 120px;
+      padding: 18px;
+      border: 2px dashed rgba(255, 255, 255, 0.28);
+      border-radius: 12px;
+      color: #d9e2f1;
+      text-align: center;
+      cursor: pointer;
+      transition: border-color 160ms ease, background 160ms ease;
+    }
+
+    .drop-zone:hover,
+    .drop-zone.is-dragging {
+      border-color: #75b7ff;
+      background: rgba(117, 183, 255, 0.12);
+    }
+
+    .file-input {
+      display: none;
+    }
+
+    .status {
+      margin-top: 12px;
+      color: #aeb8c8;
+      font-size: 13px;
+      word-break: break-word;
+    }
+
+    .status.is-error {
+      color: #ff9a9a;
+    }
+
+    .hint {
+      position: fixed;
+      right: 16px;
+      bottom: 16px;
+      z-index: 10;
+      padding: 10px 12px;
+      border-radius: 999px;
+      color: #d7dfec;
+      background: rgba(14, 17, 23, 0.72);
+      font-size: 13px;
+      backdrop-filter: blur(10px);
+    }
+  </style>
+  <script type="importmap">
+    {
+      "imports": {
+        "three": "https://unpkg.com/three@0.164.1/build/three.module.js",
+        "three/addons/": "https://unpkg.com/three@0.164.1/examples/jsm/"
+      }
+    }
+  </script>
+</head>
+<body>
+  <main class="panel">
+    <h1>HDRI Texture Viewer</h1>
+    <p>기본 EXR 텍스쳐를 배경과 환경광으로 표시합니다. `.hdr` 또는 `.exr` 파일로 교체할 수 있습니다.</p>
+
+    <label class="drop-zone" id="dropZone" for="fileInput">
+      HDR / EXR 파일 선택 또는 드래그 앤 드롭
+    </label>
+    <input class="file-input" id="fileInput" type="file" accept=".hdr,.exr,image/vnd.radiance">
+    <div class="status" id="status">기본 EXR 텍스쳐를 불러오는 중입니다.</div>
+  </main>
+
+  <div class="hint">마우스 드래그: 회전 / 휠: 줌</div>
+
+  <script type="module">
+    import * as THREE from 'three';
+    import { RGBELoader } from 'three/addons/loaders/RGBELoader.js';
+    import { EXRLoader } from 'three/addons/loaders/EXRLoader.js';
+    import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+
+    const DEFAULT_HDRI_PATH = 'assets/autumn_field_puresky_4k.exr';
+    const DEFAULT_HDRI_NAME = 'autumn_field_puresky_4k.exr';
+    const scene = new THREE.Scene();
+    const camera = new THREE.PerspectiveCamera(60, window.innerWidth / window.innerHeight, 0.1, 1000);
+    const renderer = new THREE.WebGLRenderer({ antialias: true });
+    const rgbeLoader = new RGBELoader();
+    const exrLoader = new EXRLoader();
+    const fileInput = document.getElementById('fileInput');
+    const dropZone = document.getElementById('dropZone');
+    const status = document.getElementById('status');
+    let currentTextureUrl = null;
+    let currentEnvironmentTexture = null;
+
+    renderer.setSize(window.innerWidth, window.innerHeight);
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+    renderer.toneMapping = THREE.ACESFilmicToneMapping;
+    renderer.toneMappingExposure = 1;
+    document.body.appendChild(renderer.domElement);
+
+    camera.position.set(0, 0, 5);
+
+    const controls = new OrbitControls(camera, renderer.domElement);
+    controls.enableDamping = true;
+
+    const previewMesh = createPreviewMesh();
+    scene.add(previewMesh);
+
+    window.addEventListener('resize', handleResize);
+    fileInput.addEventListener('change', handleFileInput);
+    dropZone.addEventListener('dragover', handleDragOver);
+    dropZone.addEventListener('dragleave', handleDragLeave);
+    dropZone.addEventListener('drop', handleDrop);
+
+    loadHdriTexture(DEFAULT_HDRI_PATH, DEFAULT_HDRI_NAME);
+    animate();
+
+    function createPreviewMesh() { // 중앙 미리보기 오브젝트 생성
+      const geometry = new THREE.SphereGeometry(1.25, 64, 32);
+      const material = new THREE.MeshStandardMaterial({
+        color: 0xffffff,
+        roughness: 0.12,
+        metalness: 1
+      });
+
+      return new THREE.Mesh(geometry, material);
+    }
+
+    function handleFileInput(event) { // 파일 선택 입력 처리
+      const [file] = event.target.files;
+      loadHdriFile(file);
+    }
+
+    function handleDragOver(event) { // 드래그 진입 상태 표시
+      event.preventDefault();
+      dropZone.classList.add('is-dragging');
+    }
+
+    function handleDragLeave() { // 드래그 상태 해제
+      dropZone.classList.remove('is-dragging');
+    }
+
+    function handleDrop(event) { // 드롭된 HDR 파일 처리
+      event.preventDefault();
+      dropZone.classList.remove('is-dragging');
+      const [file] = event.dataTransfer.files;
+      loadHdriFile(file);
+    }
+
+    function loadHdriFile(file) { // HDRI 파일 검증 및 로드
+      if (!file) {
+        return;
+      }
+
+      if (!isSupportedHdriFile(file.name)) {
+        setStatus('HDR 또는 EXR 파일(.hdr, .exr)만 선택할 수 있습니다.', true);
+        return;
+      }
+
+      if (currentTextureUrl) {
+        URL.revokeObjectURL(currentTextureUrl);
+      }
+
+      currentTextureUrl = URL.createObjectURL(file);
+      setStatus(`${file.name} 로딩 중...`, false);
+
+      loadHdriTexture(currentTextureUrl, file.name);
+    }
+
+    function loadHdriTexture(source, name) { // HDRI 텍스쳐 로드 및 씬 적용
+      const loader = getLoaderForFile(name);
+
+      if (!loader) {
+        setStatus('지원하지 않는 HDRI 파일 형식입니다.', true);
+        return;
+      }
+
+      loader.load(
+        source,
+        (texture) => {
+          if (currentEnvironmentTexture) {
+            currentEnvironmentTexture.dispose();
+          }
+
+          texture.mapping = THREE.EquirectangularReflectionMapping;
+          scene.background = texture;
+          scene.environment = texture;
+          currentEnvironmentTexture = texture;
+          setStatus(`${name} 적용 완료`, false);
+        },
+        undefined,
+        () => setStatus('HDRI 텍스쳐를 불러오지 못했습니다.', true)
+      );
+    }
+
+    function isSupportedHdriFile(fileName) { // 지원 확장자 확인
+      const lowerName = fileName.toLowerCase();
+      return lowerName.endsWith('.hdr') || lowerName.endsWith('.exr');
+    }
+
+    function getLoaderForFile(fileName) { // 파일 확장자에 맞는 로더 선택
+      const lowerName = fileName.toLowerCase();
+
+      if (lowerName.endsWith('.hdr')) {
+        return rgbeLoader;
+      }
+
+      if (lowerName.endsWith('.exr')) {
+        return exrLoader;
+      }
+
+      return null;
+    }
+
+    function setStatus(message, isError) { // 사용자 상태 메시지 갱신
+      status.textContent = message;
+      status.classList.toggle('is-error', isError);
+    }
+
+    function handleResize() { // 브라우저 크기 변경 반영
+      camera.aspect = window.innerWidth / window.innerHeight;
+      camera.updateProjectionMatrix();
+      renderer.setSize(window.innerWidth, window.innerHeight);
+    }
+
+    function animate() { // 렌더링 루프 실행
+      requestAnimationFrame(animate);
+      previewMesh.rotation.y += 0.002;
+      controls.update();
+      renderer.render(scene, camera);
+    }
+  </script>
+</body>
+</html>
